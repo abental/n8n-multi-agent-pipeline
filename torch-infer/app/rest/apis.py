@@ -62,7 +62,14 @@ async def detect(req: VisionRequest) -> VisionResponse:
         )
         for r in results
     ]
-    return VisionResponse(request_id=req.request_id, detections=detections)
+
+    total_objects = sum(len(d.objects) for d in detections)
+    top_labels = list(dict.fromkeys(o.label for d in detections for o in d.objects))[:5]
+    notes = f"Detected {total_objects} object(s) across {len(detections)} image(s)"
+    if top_labels:
+        notes += f": {', '.join(top_labels)}"
+
+    return VisionResponse(request_id=req.request_id, detections=detections, notes=notes)
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +101,51 @@ async def classify(req: TextClassifyRequest) -> TextClassifyResponse:
 
     result = text_analyzer.classify_text(req.text, req.request_id)
 
+    notes = f"Classified as '{result.label}' with {result.confidence:.2%} confidence"
     return TextClassifyResponse(
         request_id=req.request_id,
         classification=Classification(label=result.label, confidence=result.confidence),
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Text entity extraction endpoint
+# ---------------------------------------------------------------------------
+
+
+class TextExtractRequest(BaseModel):
+    request_id: str
+    text: str
+
+
+class ExtractedEntity(BaseModel):
+    type: str
+    value: str
+
+
+class TextExtractResponse(BaseModel):
+    request_id: str
+    entities: list[ExtractedEntity]
+    keywords: list[str]
+    model: str = text_analyzer.NER_MODEL_NAME
+    notes: str | None = None
+
+
+@router.post("/text/extract", response_model=TextExtractResponse)
+async def extract(req: TextExtractRequest) -> TextExtractResponse:
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="Text is empty")
+
+    result = text_analyzer.extract_entities(req.text, req.request_id)
+
+    entities = [
+        ExtractedEntity(type=e.type, value=e.value) for e in result.entities
+    ]
+    notes = f"Extracted {len(entities)} entity(ies) and {len(result.keywords)} keyword(s)"
+    return TextExtractResponse(
+        request_id=req.request_id,
+        entities=entities,
+        keywords=result.keywords,
+        notes=notes,
     )
