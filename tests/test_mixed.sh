@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# ============================================================================
+# End-to-end test: Mixed (text + image) analysis through A_Orchestrator
+# Requires: All services running (n8n, llm-server, Torch-Infer), all workflows active.
+# Usage:    bash tests/test_mixed.sh [N8N_BASE_URL]
+# ============================================================================
+set -euo pipefail
+
+N8N_BASE_URL="${1:-${N8N_BASE_URL:-http://localhost:5678}}"
+OUTPUT_FILE="$(dirname "$0")/expected/mixed_output.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IMAGES_DIR="${SCRIPT_DIR}/images"
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
+
+BUS_B64=$(base64 < "${IMAGES_DIR}/bus.jpg" | tr -d '\n')
+
+echo "=== E2E Test: Mixed (Text + Image) ==="
+echo "Endpoint: ${N8N_BASE_URL}/webhook/analyze"
+echo "Image: bus.jpg (base64, $(wc -c < "${IMAGES_DIR}/bus.jpg" | tr -d ' ') bytes)"
+echo ""
+
+jq -n --arg b64 "$BUS_B64" '{
+    "request_id": "m1",
+    "text": "Check if there are people near the gate.",
+    "images": [{"base64": $b64}]
+  }' | curl -s -m 600 -X POST "${N8N_BASE_URL}/webhook/analyze" \
+  -H "Content-Type: application/json" \
+  -d @- > "$TMPFILE"
+
+python3 -m json.tool < "$TMPFILE" 2>/dev/null || cat "$TMPFILE"
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+cp "$TMPFILE" "$OUTPUT_FILE"
+echo ""
+echo "Output saved to: $OUTPUT_FILE"
+echo ""
+
+echo "--- Validation ---"
+python3 - "$TMPFILE" << 'PYEOF'
+import json, sys
+
+with open(sys.argv[1]) as f:
+    raw = f.read()
+
+try:
+    r = json.loads(raw)
+except Exception:
+    print("FAIL: Response is not valid JSON")
+    sys.exit(1)
+
+checks = {
+    "request_id present": "request_id" in r,
+    "summary present": "summary" in r,
+    "findings present": "findings" in r,
+    "recommendations present": "recommendations" in r,
+    "trace present": "trace" in r,
+    "errors present": "errors" in r,
+    "errors is empty (happy path)": isinstance(r.get("errors"), list) and len(r["errors"]) == 0,
+    "findings.vision present": "vision" in r.get("findings", {}),
+    "findings.text present": "text" in r.get("findings", {}),
+    "trace mentions vision_tool": any(
+        t.get("tool") == "vision_tool" for t in r.get("trace", []) if isinstance(t, dict)
+    ),
+    "trace mentions text_tool": any(
+        t.get("tool") == "text_tool" for t in r.get("trace", []) if isinstance(t, dict)
+    ),
+    "trace mentions report_tool": any(
+        t.get("tool") == "report_tool" for t in r.get("trace", []) if isinstance(t, dict)
+    ),
+    "all three tools in trace": sum(
+        1 for t in r.get("trace", [])
+        if isinstance(t, dict) and t.get("tool") in ("vision_tool", "text_tool", "report_tool")
+    ) >= 3,
+}
+
+all_pass = True
+for name, ok in checks.items():
+    status = "PASS" if ok else "FAIL"
+    if not ok:
+        all_pass = False
+    print(f"  [{status}] {name}")
+
+sys.exit(0 if all_pass else 1)
+PYEOF
