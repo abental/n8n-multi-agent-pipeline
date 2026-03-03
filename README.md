@@ -4,7 +4,7 @@ A local AI inference pipeline orchestrated by n8n. A client sends text and/or im
 
 All inference is local — no cloud APIs. All three services (n8n, llm-server, torch-infer) run in Docker via a single `docker compose` command. Torch-Infer can optionally run on the host for local debugging (e.g. in PyCharm).
 
-> For full technical documentation (node-by-node, data contracts, testing strategy, common pitfalls), see [PROJECT_PLAN.md](PROJECT_PLAN.md).
+> For full technical documentation (node-by-node, data contracts, testing strategy, common pitfalls), see [ARCHITECTURE.md](ARCHITECTURE.md).
 > For the full testing guide (test inventory, environment setup, commands), see [TEST.md](TEST.md).
 
 ## Architecture
