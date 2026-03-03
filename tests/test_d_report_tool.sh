@@ -72,11 +72,11 @@ missing = [k for k in required if k not in r]
 checks = {
     'all 6 required keys present': len(missing) == 0,
     'request_id is string': isinstance(r.get('request_id'), str),
-    'summary is string': isinstance(r.get('summary'), str),
+    'summary is non-empty string': isinstance(r.get('summary'), str) and len(r['summary'].strip()) > 0,
     'findings is dict': isinstance(r.get('findings'), dict),
     'findings.vision exists': 'vision' in r.get('findings', {}),
     'findings.text exists': 'text' in r.get('findings', {}),
-    'recommendations is list': isinstance(r.get('recommendations'), list),
+    'recommendations is non-empty list': isinstance(r.get('recommendations'), list) and len(r['recommendations']) > 0,
     'trace is list': isinstance(r.get('trace'), list),
     'errors is list': isinstance(r.get('errors'), list),
 }

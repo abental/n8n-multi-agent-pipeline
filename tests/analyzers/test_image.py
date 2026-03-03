@@ -29,6 +29,8 @@ async def test_vision_detect_base64(client, sample_base64_image, sample_request_
     assert isinstance(body["detections"], list)
     assert isinstance(body["model"], str)
     assert len(body["model"]) > 0
+    assert isinstance(body["notes"], str)
+    assert len(body["notes"]) > 0
 
 
 async def test_vision_detect_response_schema(client, sample_base64_image):

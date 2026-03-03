@@ -46,6 +46,7 @@ checks = {
     'detections is list': isinstance(r.get('detections'), list),
     'detections[0] has objects': len(r.get('detections',[])) > 0 and 'objects' in r['detections'][0],
     'model is string': isinstance(r.get('model'), str),
+    'notes is string': isinstance(r.get('notes'), str) and len(r.get('notes','')) > 0,
     'detected cat': any(
         obj['label'] == 'cat' for det in r.get('detections',[]) for obj in det.get('objects',[])
     ),
@@ -54,7 +55,7 @@ for name, ok in checks.items():
     print(f'  [{"PASS" if ok else "FAIL"}] {name}')
     if not ok: sys.exit(1)
 PYEOF
-((PASS+=5)) || ((FAIL+=5))
+((PASS+=6)) || ((FAIL+=6))
 echo ""
 
 # ---------- TC-B2: dog image (base64) ----------

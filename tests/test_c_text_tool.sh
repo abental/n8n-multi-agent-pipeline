@@ -33,11 +33,13 @@ checks = {
     'classification.label is str': isinstance(r.get('classification',{}).get('label'), str),
     'classification.confidence in [0,1]': 0 <= r.get('classification',{}).get('confidence',0) <= 1,
     'model is str': isinstance(r.get('model'), str),
+    'entities is list': isinstance(r.get('entities'), list),
+    'notes is str': isinstance(r.get('notes'), str) and len(r.get('notes','')) > 0,
 }
 for name, ok in checks.items():
     print(f'  [{\"PASS\" if ok else \"FAIL\"}] {name}')
     if not ok: sys.exit(1)
-" && ((PASS+=4)) || ((FAIL+=4))
+" && ((PASS+=6)) || ((FAIL+=6))
 echo ""
 
 # ---------- TC-C2: safety text ----------

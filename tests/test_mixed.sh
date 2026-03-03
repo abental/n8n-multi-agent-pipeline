@@ -51,14 +51,17 @@ except Exception:
 
 checks = {
     "request_id present": "request_id" in r,
-    "summary present": "summary" in r,
+    "summary present and non-empty": isinstance(r.get("summary"), str) and len(r["summary"].strip()) > 0,
     "findings present": "findings" in r,
-    "recommendations present": "recommendations" in r,
+    "recommendations present and non-empty": isinstance(r.get("recommendations"), list) and len(r["recommendations"]) > 0,
     "trace present": "trace" in r,
     "errors present": "errors" in r,
     "errors is empty (happy path)": isinstance(r.get("errors"), list) and len(r["errors"]) == 0,
     "findings.vision present": "vision" in r.get("findings", {}),
     "findings.text present": "text" in r.get("findings", {}),
+    "trace has orchestrator step": any(
+        t.get("step") == "orchestrator" for t in r.get("trace", []) if isinstance(t, dict)
+    ),
     "trace mentions vision_tool": any(
         t.get("tool") == "vision_tool" for t in r.get("trace", []) if isinstance(t, dict)
     ),
