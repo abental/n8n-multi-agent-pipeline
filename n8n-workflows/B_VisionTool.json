@@ -17,11 +17,21 @@
     },
     {
       "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst request_id = body.request_id || 'unknown';\nconst images = Array.isArray(body.images) ? body.images : [];\nreturn [{ json: { request_id, images } }];"
+      },
+      "id": "b-prepare",
+      "name": "PreparePayload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "http://torch-infer:8000/vision/detect",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ request_id: $json.body.request_id || 'unknown', images: $json.body.images || [] }) }}",
+        "jsonBody": "={{ JSON.stringify({ request_id: $json.request_id, images: $json.images }) }}",
         "options": {
           "timeout": 120000
         }
@@ -30,7 +40,7 @@
       "name": "TorchInfer Vision",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [470, 300]
+      "position": [690, 300]
     },
     {
       "parameters": {
@@ -42,11 +52,16 @@
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [690, 300]
+      "position": [910, 300]
     }
   ],
   "connections": {
     "Webhook": {
+      "main": [
+        [{ "node": "PreparePayload", "type": "main", "index": 0 }]
+      ]
+    },
+    "PreparePayload": {
       "main": [
         [{ "node": "TorchInfer Vision", "type": "main", "index": 0 }]
       ]

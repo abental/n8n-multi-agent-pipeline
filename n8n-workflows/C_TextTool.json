@@ -17,20 +17,57 @@
     },
     {
       "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst request_id = body.request_id || 'unknown';\nconst text = (body.text || '').trim();\nreturn [{ json: { request_id, text } }];"
+      },
+      "id": "c-prepare",
+      "name": "PreparePayload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "http://torch-infer:8000/text/classify",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ request_id: $json.body.request_id || 'unknown', text: $json.body.text || '' }) }}",
+        "jsonBody": "={{ JSON.stringify({ request_id: $json.request_id, text: $json.text }) }}",
         "options": {
           "timeout": 60000
         }
       },
-      "id": "c-http",
-      "name": "TorchInfer Text",
+      "id": "c-http-classify",
+      "name": "TorchInfer Classify",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [470, 300]
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://torch-infer:8000/text/extract",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ request_id: $('PreparePayload').first().json.request_id, text: $('PreparePayload').first().json.text }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "c-http-extract",
+      "name": "TorchInfer Extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const classify = $('TorchInfer Classify').first().json;\nconst extract = $input.first().json;\nreturn [{\n  json: {\n    request_id: classify.request_id,\n    classification: classify.classification,\n    entities: extract.entities || [],\n    model: classify.model,\n    notes: classify.notes || null\n  }\n}];"
+      },
+      "id": "c-merge",
+      "name": "MergeResults",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
     },
     {
       "parameters": {
@@ -42,16 +79,31 @@
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [690, 300]
+      "position": [1350, 300]
     }
   ],
   "connections": {
     "Webhook": {
       "main": [
-        [{ "node": "TorchInfer Text", "type": "main", "index": 0 }]
+        [{ "node": "PreparePayload", "type": "main", "index": 0 }]
       ]
     },
-    "TorchInfer Text": {
+    "PreparePayload": {
+      "main": [
+        [{ "node": "TorchInfer Classify", "type": "main", "index": 0 }]
+      ]
+    },
+    "TorchInfer Classify": {
+      "main": [
+        [{ "node": "TorchInfer Extract", "type": "main", "index": 0 }]
+      ]
+    },
+    "TorchInfer Extract": {
+      "main": [
+        [{ "node": "MergeResults", "type": "main", "index": 0 }]
+      ]
+    },
+    "MergeResults": {
       "main": [
         [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
       ]
