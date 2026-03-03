@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $input.first().json.body;\n\nconst request_id = body.request_id || 'req-' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);\nconst text = (body.text || '').trim();\nconst images = Array.isArray(body.images) ? body.images : [];\nconst task_type = body.task_type || 'auto';\n\nconst has_text = text.length > 0;\nconst has_images = images.length > 0;\n\nreturn [{\n  json: {\n    request_id,\n    text,\n    images,\n    task_type,\n    has_text,\n    has_images,\n    trace: []\n  }\n}];"
+        "jsCode": "const body = $input.first().json.body;\n\nconst request_id = body.request_id || 'req-' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);\nconst text = (body.text || '').trim();\nconst images = Array.isArray(body.images) ? body.images : [];\nconst task_type = body.task_type || 'auto';\n\nconst has_text = text.length > 0;\nconst has_images = images.length > 0;\n\nreturn [{\n  json: {\n    request_id,\n    text,\n    images,\n    task_type,\n    has_text,\n    has_images\n  }\n}];"
       },
       "id": "a-normalize",
       "name": "NormalizeInput",
@@ -27,38 +27,101 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nlet vision_result = null;\nlet text_result = null;\nconst trace = [...input.trace];\n\nconst tools_to_call = [];\nif (input.has_images) tools_to_call.push('vision');\nif (input.has_text) tools_to_call.push('text');\ntools_to_call.push('report');\nconst decision = 'called ' + tools_to_call.join('+') + ' then report';\ntrace.push({ step: 'orchestrator', decision: decision });\n\nif (input.has_images) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://localhost:5678/webhook/tool/vision',\n      body: { request_id: input.request_id, images: input.images },\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 60000\n    });\n    vision_result = resp;\n    trace.push({ step: 'tool_call', tool: 'vision_tool', status: 'ok' });\n  } catch (e) {\n    trace.push({ step: 'tool_call', tool: 'vision_tool', status: 'error', error: e.message });\n  }\n}\n\nif (input.has_text) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://localhost:5678/webhook/tool/text',\n      body: { request_id: input.request_id, text: input.text },\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 60000\n    });\n    text_result = resp;\n    trace.push({ step: 'tool_call', tool: 'text_tool', status: 'ok' });\n  } catch (e) {\n    trace.push({ step: 'tool_call', tool: 'text_tool', status: 'error', error: e.message });\n  }\n}\n\nreturn [{\n  json: {\n    request_id: input.request_id,\n    original_input: { text: input.text, images: input.images, task_type: input.task_type },\n    vision_result,\n    text_result,\n    trace\n  }\n}];"
+        "agent": "openAiFunctionsAgent",
+        "promptType": "define",
+        "text": "={{ 'Analyze this input and call the appropriate tools.\\nrequest_id: ' + $json.request_id + '\\nhas_text: ' + $json.has_text + '\\nhas_images: ' + $json.has_images + '\\ntext: ' + ($json.text || 'none') + '\\nimages_count: ' + ($json.images || []).length }}",
+        "options": {
+          "systemMessage": "You are an orchestration agent.\nYou MUST decide which tools to call:\n- If has_images is true -> call call_vision_tool\n- If has_text is true -> call call_text_tool\n- Always call call_report_tool last.\nNever invent detections or classifications. Use tool outputs only.\nReturn the final report JSON from the report tool as your response.\n\nOUTPUT REQUIREMENTS:\n- Return the JSON from call_report_tool exactly as received.\n- If a tool fails, note it but continue with the other tools.",
+          "maxIterations": 5
+        }
       },
-      "id": "a-call-tools",
-      "name": "CallTools",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [700, 300]
+      "id": "a-agent",
+      "name": "OrchestratorAgent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [700, 300],
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "/models/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"
+        },
+        "options": {
+          "baseURL": "http://llm-server:8080/v1",
+          "temperature": 0
+        }
+      },
+      "id": "a-llm",
+      "name": "LlamaCppLLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [550, 520],
+      "credentials": {
+        "openAiApi": {
+          "id": "llama-local-cred",
+          "name": "llama.cpp Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "call_vision_tool",
+        "description": "Analyze images for object detection. Call this tool when has_images is true. Returns detected objects with labels and confidence scores.",
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/tool/vision",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ request_id: $('NormalizeInput').first().json.request_id, images: $('NormalizeInput').first().json.images }) }}"
+      },
+      "id": "a-tool-vision",
+      "name": "call_vision_tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [650, 520]
+    },
+    {
+      "parameters": {
+        "name": "call_text_tool",
+        "description": "Classify text content. Call this tool when has_text is true. Returns a classification label and confidence score.",
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/tool/text",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ request_id: $('NormalizeInput').first().json.request_id, text: $('NormalizeInput').first().json.text }) }}"
+      },
+      "id": "a-tool-text",
+      "name": "call_text_tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [750, 520]
+    },
+    {
+      "parameters": {
+        "name": "call_report_tool",
+        "description": "Generate the final analysis report. ALWAYS call this tool LAST, after vision and text tools. It produces the final structured JSON report.",
         "method": "POST",
         "url": "http://localhost:5678/webhook/tool/report",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ request_id: $json.request_id, original_input: $json.original_input, vision_result: $json.vision_result, text_result: $json.text_result, trace: [...$json.trace, {step: 'tool_call', tool: 'report_tool'}] }) }}",
-        "options": {
-          "timeout": 600000
-        },
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        }
+        "jsonBody": "={{ JSON.stringify({ request_id: $('NormalizeInput').first().json.request_id, original_input: { text: $('NormalizeInput').first().json.text, images: $('NormalizeInput').first().json.images, task_type: $('NormalizeInput').first().json.task_type }, vision_result: null, text_result: null, trace: [] }) }}"
       },
-      "id": "a-call-report",
-      "name": "CallReportTool",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "id": "a-tool-report",
+      "name": "call_report_tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [850, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('NormalizeInput').first().json;\nconst agentOutput = $input.first().json;\n\nlet vision_result = null;\nlet text_result = null;\nlet report_from_agent = null;\nconst agent_trace = [];\n\nconst steps = agentOutput.intermediateSteps || [];\nfor (const step of steps) {\n  const toolName = (step.action && step.action.tool) || '';\n  const obs = step.observation || '';\n  let parsed = null;\n  try {\n    parsed = typeof obs === 'string' ? JSON.parse(obs) : obs;\n  } catch (e) { /* not JSON */ }\n\n  if (toolName.includes('vision')) {\n    vision_result = parsed;\n    agent_trace.push({ step: 'tool_call', tool: 'vision_tool', status: parsed ? 'ok' : 'error' });\n  } else if (toolName.includes('text') && !toolName.includes('report')) {\n    text_result = parsed;\n    agent_trace.push({ step: 'tool_call', tool: 'text_tool', status: parsed ? 'ok' : 'error' });\n  } else if (toolName.includes('report')) {\n    report_from_agent = parsed;\n  }\n}\n\nif (!vision_result && input.has_images) {\n  try {\n    vision_result = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://localhost:5678/webhook/tool/vision',\n      body: { request_id: input.request_id, images: input.images },\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 120000\n    });\n    agent_trace.push({ step: 'tool_call', tool: 'vision_tool', status: 'ok' });\n  } catch (e) {\n    agent_trace.push({ step: 'tool_call', tool: 'vision_tool', status: 'error', error: e.message });\n  }\n}\n\nif (!text_result && input.has_text) {\n  try {\n    text_result = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://localhost:5678/webhook/tool/text',\n      body: { request_id: input.request_id, text: input.text },\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 120000\n    });\n    agent_trace.push({ step: 'tool_call', tool: 'text_tool', status: 'ok' });\n  } catch (e) {\n    agent_trace.push({ step: 'tool_call', tool: 'text_tool', status: 'error', error: e.message });\n  }\n}\n\nconst tools_used = [];\nif (vision_result) tools_used.push('vision');\nif (text_result) tools_used.push('text');\ntools_used.push('report');\nconst decision = 'called ' + tools_used.join('+') + ' then report';\nconst trace = [{ step: 'orchestrator', decision }, ...agent_trace];\n\nconst hasVisionOk = !input.has_images || (report_from_agent && report_from_agent.findings && report_from_agent.findings.vision && Array.isArray(report_from_agent.findings.vision.top_objects) && report_from_agent.findings.vision.top_objects.length > 0);\nconst hasTextOk = !input.has_text || (report_from_agent && report_from_agent.findings && report_from_agent.findings.text && report_from_agent.findings.text.label && report_from_agent.findings.text.label !== 'null');\nif (report_from_agent && report_from_agent.request_id && report_from_agent.summary && typeof report_from_agent.summary === 'string' && report_from_agent.summary.trim().length > 0 && hasVisionOk && hasTextOk) {\n  report_from_agent.trace = trace;\n  return [{ json: report_from_agent }];\n}\n\ntrace.push({ step: 'tool_call', tool: 'report_tool' });\ntry {\n  const reportResp = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'http://localhost:5678/webhook/tool/report',\n    body: {\n      request_id: input.request_id,\n      original_input: { text: input.text, images: input.images, task_type: input.task_type },\n      vision_result,\n      text_result,\n      trace\n    },\n    headers: { 'Content-Type': 'application/json' },\n    timeout: 600000\n  });\n  return [{ json: reportResp }];\n} catch (e) {\n  return [{ json: {\n    request_id: input.request_id,\n    summary: 'Report generation failed: ' + e.message,\n    findings: { vision: { top_objects: [], details: [] }, text: { label: null, confidence: null, entities: [] } },\n    recommendations: ['Retry the analysis or check the LLM service.'],\n    trace,\n    errors: ['Report tool error: ' + e.message]\n  }}];\n}"
+      },
+      "id": "a-format",
+      "name": "FormatResponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [940, 300]
     },
     {
@@ -76,24 +139,28 @@
   ],
   "connections": {
     "Webhook": {
-      "main": [
-        [{ "node": "NormalizeInput", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "NormalizeInput", "type": "main", "index": 0 }]]
     },
     "NormalizeInput": {
-      "main": [
-        [{ "node": "CallTools", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "OrchestratorAgent", "type": "main", "index": 0 }]]
     },
-    "CallTools": {
-      "main": [
-        [{ "node": "CallReportTool", "type": "main", "index": 0 }]
-      ]
+    "LlamaCppLLM": {
+      "ai_languageModel": [[{ "node": "OrchestratorAgent", "type": "ai_languageModel", "index": 0 }]]
     },
-    "CallReportTool": {
-      "main": [
-        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
-      ]
+    "call_vision_tool": {
+      "ai_tool": [[{ "node": "OrchestratorAgent", "type": "ai_tool", "index": 0 }]]
+    },
+    "call_text_tool": {
+      "ai_tool": [[{ "node": "OrchestratorAgent", "type": "ai_tool", "index": 0 }]]
+    },
+    "call_report_tool": {
+      "ai_tool": [[{ "node": "OrchestratorAgent", "type": "ai_tool", "index": 0 }]]
+    },
+    "OrchestratorAgent": {
+      "main": [[{ "node": "FormatResponse", "type": "main", "index": 0 }]]
+    },
+    "FormatResponse": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
     }
   },
   "settings": {

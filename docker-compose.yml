@@ -10,6 +10,7 @@ services:
       - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE:-false}
       - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
       - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_TASK_TIMEOUT=900
       - TORCH_INFER_BASE_URL=${TORCH_INFER_BASE_URL:-http://torch-infer:8000}
     volumes:
       - ./n8n-data:/home/node/.n8n
