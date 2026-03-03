@@ -1,0 +1,106 @@
+{
+  "name": "A_Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analyze",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "orchestrator-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst request_id = body.request_id || 'req-' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);\nconst text = (body.text || '').trim();\nconst images = Array.isArray(body.images) ? body.images : [];\n\nconst has_text = text.length > 0;\nconst has_images = images.length > 0;\n\nreturn [{\n  json: {\n    request_id,\n    text,\n    images,\n    has_text,\n    has_images,\n    trace: []\n  }\n}];"
+      },
+      "id": "a-normalize",
+      "name": "NormalizeInput",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nlet vision_result = null;\nlet text_result = null;\nconst trace = [...input.trace];\n\nif (input.has_images) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://localhost:5678/webhook/tool/vision',\n      body: { request_id: input.request_id, images: input.images },\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 60000\n    });\n    vision_result = resp;\n    trace.push({ step: 'tool_call', tool: 'vision_tool', status: 'ok' });\n  } catch (e) {\n    trace.push({ step: 'tool_call', tool: 'vision_tool', status: 'error', error: e.message });\n  }\n}\n\nif (input.has_text) {\n  try {\n    const resp = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'http://localhost:5678/webhook/tool/text',\n      body: { request_id: input.request_id, text: input.text },\n      headers: { 'Content-Type': 'application/json' },\n      timeout: 60000\n    });\n    text_result = resp;\n    trace.push({ step: 'tool_call', tool: 'text_tool', status: 'ok' });\n  } catch (e) {\n    trace.push({ step: 'tool_call', tool: 'text_tool', status: 'error', error: e.message });\n  }\n}\n\nreturn [{\n  json: {\n    request_id: input.request_id,\n    original_input: { text: input.text, images: input.images },\n    vision_result,\n    text_result,\n    trace\n  }\n}];"
+      },
+      "id": "a-call-tools",
+      "name": "CallTools",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/tool/report",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ request_id: $json.request_id, original_input: $json.original_input, vision_result: $json.vision_result, text_result: $json.text_result, trace: [...$json.trace, {step: 'tool_call', tool: 'report_tool'}] }) }}",
+        "options": {
+          "timeout": 600000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "id": "a-call-report",
+      "name": "CallReportTool",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "a-respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1180, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "NormalizeInput", "type": "main", "index": 0 }]
+      ]
+    },
+    "NormalizeInput": {
+      "main": [
+        [{ "node": "CallTools", "type": "main", "index": 0 }]
+      ]
+    },
+    "CallTools": {
+      "main": [
+        [{ "node": "CallReportTool", "type": "main", "index": 0 }]
+      ]
+    },
+    "CallReportTool": {
+      "main": [
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "active": true
+}

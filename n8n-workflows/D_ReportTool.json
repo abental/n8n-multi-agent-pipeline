@@ -1,0 +1,63 @@
+{
+  "name": "D_ReportTool",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tool/report",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "d-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "report-tool-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst request_id = body.request_id || 'unknown';\nconst vision_result = body.vision_result || null;\nconst text_result = body.text_result || null;\nconst trace = body.trace || [];\nconst sysPrompt = 'You are a report writer. Use ONLY the provided tool outputs. Do not hallucinate. OUTPUT: JSON only. No markdown. SCHEMA: {request_id, summary, findings:{vision:{top_objects:[],details:[]},text:{label,confidence,entities:[]}}, recommendations:[], trace:[], errors:[]}';\nlet user = 'request_id=' + request_id;\nif (vision_result) {\n  const objs = (vision_result.detections || []).flatMap(d => (d.objects || []).map(o => o.label + ':' + (o.score || 0).toFixed(2))).slice(0, 10);\n  user += ' VISION=[' + objs.join(',') + ']';\n} else { user += ' VISION=NONE'; }\nif (text_result) {\n  const c = text_result.classification || {};\n  user += ' TEXT=' + (c.label || 'unknown') + ':' + (c.confidence || 0).toFixed(2);\n} else { user += ' TEXT=NONE'; }\nuser += ' TRACE=' + JSON.stringify(trace);\nreturn [{ json: { request_id, trace, vision_result, text_result, llm_payload: { model: 'local-llama', messages: [{ role: 'system', content: sysPrompt }, { role: 'user', content: user }], temperature: 0.1, max_tokens: 512 } } }];"
+      },
+      "id": "d-build",
+      "name": "BuildReportInputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://llm-server:8080/v1/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llm_payload) }}",
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "id": "d-llm",
+      "name": "LLM ReportWriter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const buildInput = $('BuildReportInputs').first().json;\nconst llmResp = $input.first().json;\nlet report;\ntry {\n  let content = llmResp.choices[0].message.content;\n  content = content.replace(/^[\\s\\S]*?\\{/, '{');\n  const lastBrace = content.lastIndexOf('}');\n  if (lastBrace !== -1) content = content.substring(0, lastBrace + 1);\n  report = JSON.parse(content);\n} catch (e) {\n  report = { request_id: buildInput.request_id, summary: 'LLM returned invalid JSON', findings: {}, recommendations: [], trace: buildInput.trace || [], errors: ['LLM parse error: ' + e.message] };\n}\nreport.request_id = report.request_id || buildInput.request_id;\nif (typeof report.summary !== 'string') report.summary = String(report.summary || '');\nif (!report.findings || typeof report.findings !== 'object') report.findings = {};\nif (!report.findings.vision || typeof report.findings.vision !== 'object') report.findings.vision = { top_objects: [], details: [] };\nif (!Array.isArray(report.findings.vision.top_objects)) report.findings.vision.top_objects = [];\nif (!Array.isArray(report.findings.vision.details)) report.findings.vision.details = [];\nconst vr = buildInput.vision_result;\nif (vr && vr.detections && report.findings.vision.top_objects.length === 0) {\n  const objs = vr.detections.flatMap(d => (d.objects || []).map(o => ({label: o.label, score: o.score})));\n  report.findings.vision.top_objects = objs.slice(0, 10);\n}\nif (!report.findings.text || typeof report.findings.text !== 'object') report.findings.text = { label: null, confidence: null, entities: [] };\nconst tr = buildInput.text_result;\nif (tr && tr.classification) {\n  if (!report.findings.text.label) report.findings.text.label = tr.classification.label;\n  if (!report.findings.text.confidence) report.findings.text.confidence = tr.classification.confidence;\n}\nif (report.findings.text.label === undefined) report.findings.text.label = null;\nif (report.findings.text.confidence === undefined) report.findings.text.confidence = null;\nif (!Array.isArray(report.findings.text.entities)) report.findings.text.entities = [];\nif (!Array.isArray(report.recommendations)) report.recommendations = [];\nif (!Array.isArray(report.trace)) report.trace = buildInput.trace || [];\nif (!Array.isArray(report.errors)) report.errors = [];\nreturn [{ json: report }];"
+      },
+      "id": "d-validate",
+      "name": "ValidateReportJSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "BuildReportInputs", "type": "main", "index": 0 }]] },
+    "BuildReportInputs": { "main": [[{ "node": "LLM ReportWriter", "type": "main", "index": 0 }]] },
+    "LLM ReportWriter": { "main": [[{ "node": "ValidateReportJSON", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": true
+}
