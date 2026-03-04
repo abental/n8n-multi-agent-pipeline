@@ -17,6 +17,7 @@ This document describes all significant problems encountered during development 
 9. [Model Loading Delays (Cold Start)](#9-model-loading-delays-cold-start)
 10. [n8n API Requires API Key](#10-n8n-api-requires-api-key)
 11. [Torch-Infer Error Handling Through n8n](#11-torch-infer-error-handling-through-n8n)
+12. [n8n OpenAI Credential Points to api.openai.com Instead of Local LLM](#12-n8n-openai-credential-points-to-apiopenaicom-instead-of-local-llm)
 
 ---
 
@@ -376,6 +377,120 @@ fi
 ```
 
 This approach is resilient to n8n's error handling behavior regardless of `responseMode` configuration.
+
+---
+
+## 12. n8n OpenAI Credential Points to api.openai.com Instead of Local LLM
+
+### Problem
+
+When running the A_Orchestrator workflow from the n8n UI (clicking "Test workflow" or executing individual nodes), the AI Agent's LLM sub-node (`lmChatOpenAi`) fails with:
+
+```
+Authorization failed - please check your credentials
+Incorrect API key provided: sk-no-ke******ired.
+You can find your API key at https://platform.openai.com/account/api-keys.
+```
+
+### Root Cause
+
+The `llama-local-cred` OpenAI API credential stored in n8n's database only contained `apiKey: "sk-no-key-required"` but **no custom base URL**. Without a `url` field in the credential data, n8n's `lmChatOpenAi` node defaults to sending requests to `https://api.openai.com/v1`, which rejects the dummy API key.
+
+The `options.baseURL` setting on the node itself is meant to override the endpoint, but n8n validates the credential against the default OpenAI URL before the node-level override takes effect — particularly when testing from the UI.
+
+### Fix
+
+Update the credential in n8n's SQLite database to include the local LLM server URL. Run this from the project root:
+
+```bash
+python3 << 'PYEOF'
+import json, subprocess, sqlite3
+
+# Step 1: Read the encryption key from n8n config
+result = subprocess.run(
+    ['docker', 'compose', 'exec', 'n8n', 'cat', '/home/node/.n8n/config'],
+    capture_output=True, text=True
+)
+enc_key = json.loads(result.stdout.strip())['encryptionKey']
+
+# Step 2: Encrypt the credential data (apiKey + url) using n8n's CryptoJS format
+cred_data = json.dumps({
+    "apiKey": "sk-no-key-required",
+    "url": "http://llm-server:8080/v1"
+})
+
+node_script = f"""
+const crypto = require('crypto');
+function encryptCryptoJS(text, passphrase) {{
+  const salt = crypto.randomBytes(8);
+  const password = Buffer.from(passphrase, 'utf8');
+  const keyIvLen = 32 + 16;
+  let derived = Buffer.alloc(0);
+  let block = Buffer.alloc(0);
+  while (derived.length < keyIvLen) {{
+    block = crypto.createHash('md5').update(Buffer.concat([block, password, salt])).digest();
+    derived = Buffer.concat([derived, block]);
+  }}
+  const key = derived.slice(0, 32);
+  const iv = derived.slice(32, 48);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  let encrypted = cipher.update(text, 'utf8');
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  return Buffer.concat([Buffer.from('Salted__'), salt, encrypted]).toString('base64');
+}}
+console.log(encryptCryptoJS('{cred_data}', '{enc_key}'));
+"""
+
+result2 = subprocess.run(
+    ['docker', 'compose', 'exec', 'n8n', 'node', '-e', node_script],
+    capture_output=True, text=True
+)
+encrypted_data = result2.stdout.strip()
+if not encrypted_data:
+    print(f"ERROR: encryption failed: {result2.stderr}")
+    exit(1)
+
+# Step 3: Update the credential in SQLite
+db_path = 'n8n-data/database.sqlite'
+conn = sqlite3.connect(db_path)
+cursor = conn.cursor()
+cursor.execute(
+    "UPDATE credentials_entity SET data = ? WHERE id = 'llama-local-cred'",
+    (encrypted_data,)
+)
+if cursor.rowcount == 0:
+    now = '2026-01-01T00:00:00.000Z'
+    cursor.execute(
+        "INSERT INTO credentials_entity (id, name, type, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)",
+        ('llama-local-cred', 'llama.cpp Local', 'openAiApi', encrypted_data, now, now)
+    )
+conn.commit()
+conn.close()
+print("Credential updated with url: http://llm-server:8080/v1")
+PYEOF
+```
+
+Then restart n8n so it picks up the changed credential:
+
+```bash
+docker restart n8n
+```
+
+### Why This Happens on Clean Database
+
+When the n8n database is recreated (e.g., after deleting `n8n-data/database.sqlite`), the credential must be re-inserted. The workflow JSON files reference `"id": "llama-local-cred"` in their `credentials` section, but **n8n does not import credentials with workflows** — only the reference is stored. The credential data itself must be created separately, either through the n8n UI or by direct database insertion as shown above.
+
+### Alternative: Create via n8n UI
+
+Instead of the script, you can create the credential manually:
+
+1. Open `http://localhost:5678` in your browser.
+2. Go to **Settings → Credentials → Add Credential**.
+3. Select **OpenAI API**.
+4. Set **API Key** to `sk-no-key-required`.
+5. Set **Base URL** to `http://llm-server:8080/v1`.
+6. Save with the name `llama.cpp Local`.
+7. In the A_Orchestrator workflow, update the LlamaCppLLM node to use this credential.
 
 ---
 
